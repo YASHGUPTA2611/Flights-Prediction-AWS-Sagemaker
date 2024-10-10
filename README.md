@@ -2,4 +2,5 @@
 
 Streamlit App Link = https://flights-price-prediction-app-deployment-orwdbbtjcrxfoxrfbgv8dx.streamlit.app/
 
-![](additional_files/first-ezgif.com-video-to-gif-converter.gif | width=100)
+<img src="additional_files/first-ezgif.com-video-to-gif-converter.gif" width="600" height="400" />
+![](additional_files/first-ezgif.com-video-to-gif-converter.gif)
