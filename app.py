@@ -1,23 +1,19 @@
 import os
-
+import json
+import matplotlib.pyplot as plt
 import pickle
-
+from functools import lru_cache
 import warnings
-
-import joblib
-
+import catboost as cb
 import numpy as np
-
+import joblib
 import pandas as pd
-
-import xgboost as xgb
-
 import streamlit as st
-
+import xgboost as xgb
+from sklearn.linear_model import LinearRegression
 import sklearn
 from sklearn.metrics import r2_score
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics.pairwise import rbf_kernel
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.compose import ColumnTransformer
@@ -40,148 +36,159 @@ from feature_engine.encoding import (
 	CountFrequencyEncoder
 )
 
+with open("dictionary_distance", 'r') as json_file:
+    distance_dictionary = json.load(json_file)
+    
 sklearn.set_config(transform_output="pandas")
-
 # convenience functions
 
-
 # airline
-air_transformer = Pipeline(steps=[
-    ("imputer", SimpleImputer(strategy="most_frequent")),
-    ("grouper", RareLabelEncoder(tol=0.1, replace_with="Other", n_categories=2)),
-    ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore"))
+# airline_transformer = Pipeline(steps = [
+#                                     ("grouper", RareLabelEncoder(tol=  0.1, replace_with = "Other", n_categories=2)),
+#                                     ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore"))
+    
+# ])
+
+
+airline_transformer = Pipeline(steps = [
+                                    ("grouper", RareLabelEncoder(tol=  0.05, replace_with = "Other", n_categories=2)),
+                                    # ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore"))
+                                    ("mean_encoder", MeanEncoder()),
+                                	("scaler", PowerTransformer())
+    
 ])
 
-#doj
-feature_to_extract = ["month", "week", "day_of_week", "day_of_year"]
+# -------------------------------------------------------------------------------------------
+
+
+# #doj
+# feature_to_extract = ["month", "week", "day_of_week" ]
+
+# doj_transformer = Pipeline(steps=[
+# 	("dt", DatetimeFeatures(features_to_extract=feature_to_extract, yearfirst=True, format="mixed")),
+# 	("scaler", MinMaxScaler())
+# ])
+
+feature_to_extract = ["week", "day_of_week"]
 
 doj_transformer = Pipeline(steps=[
-    ("dt", DatetimeFeatures(features_to_extract=feature_to_extract, yearfirst=True, format="mixed")),
-    ("scaler", MinMaxScaler())
+	("dt", DatetimeFeatures(features_to_extract=feature_to_extract, yearfirst=True, format="mixed")),
+	("scaler", MinMaxScaler())
 ])
 
+
+
+# -------------------------------------------------------------------------------------------
+
 # source & destination
-location_pipe1 = Pipeline(steps=[
-    ("grouper", RareLabelEncoder(tol=0.1, replace_with="Other", n_categories=2)),
-    ("encoder", MeanEncoder()),
+
+def source_destination(train):
+    sd_subset = train[["source","destination"]]
+    sd_subset[["source", "destination"]] = sd_subset[["source", "destination"]].apply(lambda col: col.str.lower())
+    sd_subset["source_destination"] = (sd_subset["source"].astype(str) + "_" + sd_subset["destination"])
+    
+    return pd.DataFrame(sd_subset["source_destination"], columns=["source_destination"])
+
+
+def return_distance_df(train):
+    distance = train["source_destination"].map(distance_dictionary)
+    
+    # Create a DataFrame with the calculated distance
+    return pd.DataFrame({"distance_between_cities": distance})
+
+    
+## Lets fist convert airline coulumn to Countvectorizer() finction of feature_engine
+sd_count_transformer = Pipeline(steps = [
+                                    ( "source_destination" , FunctionTransformer(source_destination)),
+                                    ("grouper", RareLabelEncoder(tol=  0.1, replace_with = "Other", n_categories=2)),
+                                    # ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore"))
+                                    ("count_encoder", CountFrequencyEncoder()),
+                                	("scaler", PowerTransformer())
+    
+])
+
+location_pipe2 = Pipeline(steps=[
+    ( "source_destination" , FunctionTransformer(source_destination)),
+    # ("grouper", RareLabelEncoder(tol=  0.1, replace_with = "Other", n_categories=2)),
+	("encoder", FunctionTransformer(func=return_distance_df)),
+    ("StandardScaler", StandardScaler())
+])
+
+
+location_transformer = FeatureUnion(transformer_list=[
+	("part1", sd_count_transformer),
+    ("part2", location_pipe2),
+])
+
+
+# -------------------------------------------------------------------------------------------
+
+
+
+# dep_time & arrival_time
+
+def part_of_day(X, morning=4, noon=12, eve=16, night=20):
+	columns = X.columns.to_list()
+	X_temp = X.assign(**{
+		col: pd.to_datetime(X.loc[:, col]).dt.hour
+		for col in columns
+	})
+
+	return (
+		X_temp
+		.assign(**{
+			f"{col}_part_of_day": np.select(
+				[X_temp.loc[:, col].between(morning, noon, inclusive="left"),
+				 X_temp.loc[:, col].between(noon, eve, inclusive="left"),
+				 X_temp.loc[:, col].between(eve, night, inclusive="left")],
+				["morning", "afternoon", "evening"],
+				default="night"
+			)
+			for col in columns
+		})
+		.drop(columns=columns)
+	)
+
+
+def dep_arrival(train):
+    time_subset = train[["dep_time_part_of_day","arrival_time_part_of_day"]]
+    time_subset[["dep_time_part_of_day", "arrival_time_part_of_day"]] = time_subset[["dep_time_part_of_day", "arrival_time_part_of_day"]].apply(lambda col: col.str.lower())
+    time_subset["dept_arrival"] = (time_subset["dep_time_part_of_day"].astype(str) + "_" + time_subset["arrival_time_part_of_day"])
+    
+    return pd.DataFrame(time_subset["dept_arrival"], columns=["dept_arrival"])
+
+
+time_transformer = Pipeline(steps=[
+	("part", FunctionTransformer(func=part_of_day)),
+	("label_encoder", FunctionTransformer(func=dep_arrival)),
+    ("count_encoder", CountFrequencyEncoder()),
     ("scaler", PowerTransformer())
 ])
 
-def is_north(X):
-    columns = X.columns.to_list()
-    north_cities = ["Delhi", "Kolkata", "Mumbai"]
-    return (
-        X
-        .assign(**{
-            f"{col}_is_north": X.loc[:, col].isin(north_cities).astype(int)
-            for col in columns
-        })
-        .drop(columns=columns)
-    )
 
-location_transformer = FeatureUnion(transformer_list=[
-    ("part1", location_pipe1),
-    ("part2", FunctionTransformer(func=is_north))
-])
+# --------------------------------------------------------------------------------------      
 
-# dep_time & arrival_time
-time_pipe1 = Pipeline(steps=[
-    ("dt", DatetimeFeatures(features_to_extract=["hour", "minute"])),
-    ("scaler", MinMaxScaler())
-])
+# duration    
 
-def part_of_day(X, morning=4, noon=12, eve=16, night=20):
-    columns = X.columns.to_list()
-    X_temp = X.assign(**{
-        col: pd.to_datetime(X.loc[:, col]).dt.hour
-        for col in columns
-    })
+## Standarize columns=  "total_stops", "duration"
 
-    return (
-        X_temp
-        .assign(**{
-            f"{col}_part_of_day": np.select(
-                [X_temp.loc[:, col].between(morning, noon, inclusive="left"),
-                 X_temp.loc[:, col].between(noon, eve, inclusive="left"),
-                 X_temp.loc[:, col].between(eve, night, inclusive="left")],
-                ["morning", "afternoon", "evening"],
-                default="night"
-            )
-            for col in columns
-        })
-        .drop(columns=columns)
-    )
-
-time_pipe2 = Pipeline(steps=[
-    ("part", FunctionTransformer(func=part_of_day)),
-    ("encoder", CountFrequencyEncoder()),
-    ("scaler", MinMaxScaler())
-])
-
-time_transformer = FeatureUnion(transformer_list=[
-    ("part1", time_pipe1),
-    ("part2", time_pipe2)
-])
-
-# duration
-
-def duration_category(X, short=180, med=400):
-    return (
-        X
-        .assign(duration_cat=np.select([X.Duration_in_minute.lt(short),
-                                    X.Duration_in_minute.between(short, med, inclusive="left")],
-                                    ["short", "medium"],
-                                    default="long"))
-        .drop(columns="Duration_in_minute")
-    )
-
-def is_over(X, value=1000):
-    return (
-        X
-        .assign(**{
-            f"duration_over_{value}": X.Duration_in_minute.ge(value).astype(int)
-        })
-        .drop(columns="Duration_in_minute")
-    )
-
-duration_pipe = Pipeline(steps=[
-	("cat", FunctionTransformer(func=duration_category)),
-	("encoder", OrdinalEncoder(categories=[["short", "medium", "long"]]))
-])
-
-duration_union = FeatureUnion(transformer_list=[
-	("part1", duration_pipe),
-	("part2", FunctionTransformer(func=is_over)),
-	("part3", StandardScaler())
-])
-
-duration_transformer = Pipeline(steps=[
-	("outliers", Winsorizer(capping_method="iqr", fold=1.5)),
-	("imputer", SimpleImputer(strategy="median")),
-	("union", duration_union)
+stand = Pipeline(steps=[
+    
+	("scaling", StandardScaler())
 ])
 
 
-
-# total_stops
-def is_direct(X):
-    return X.assign(is_direct_flight=X.Total_Stops.eq(0).astype(int))
+# ----------------------------------------------------------------------------------
 
 
-total_stops_transformer = Pipeline(steps=[
-    ("imputer", SimpleImputer(strategy="most_frequent")),
-    ("", FunctionTransformer(func=is_direct))
-])
-
-
-## column transformer
+# column transformer
 column_transformer = ColumnTransformer(transformers=[
-	("air", air_transformer, ["Airline"]),
-	("doj", doj_transformer, ["Date_of_Journey"]),
-	("location", location_transformer, ["Source", 'Destination']),
-    ("time", time_transformer, ["Dep_Time", "Arrival_Time"]),
-	("dur", duration_transformer, ["Duration_in_minute"]),
-    ("stops", total_stops_transformer, ["Total_Stops"]),],remainder="passthrough" ) 
+	("air", airline_transformer, ["airline"]),
+	("doj", doj_transformer, ["date_of_journey"]),
+	("location", location_transformer, ["source", 'destination']),
+    ("time", time_transformer, ["dep_time", "arrival_time"]),
+    ("stand", stand, ["duration", "total_stops"])],remainder="passthrough" ) 
+
 
 # feature selector
 estimator = RandomForestRegressor(n_estimators=10, max_depth=3, random_state=42)
@@ -199,11 +206,10 @@ preprocessor = Pipeline(steps=[
 ])
 
 
-
 # read the training data
 train = pd.read_csv("train.csv")
-X_train = train.drop(columns="Price")
-y_train = train.Price.copy()
+X_train = train.drop(columns="price")
+y_train = train.price.copy()
 
 # fit and save the preprocessor
 preprocessor.fit(X_train, y_train)
@@ -221,19 +227,19 @@ st.title("Flights Prices Prediction - AWS SageMaker")
 # user inputs
 airline = st.selectbox(
 	"Airline:",
-	options=X_train.Airline.unique()
+	options=X_train.airline.unique()
 )
 
 doj = st.date_input("Date of Journey:")
 
 source = st.selectbox(
 	"Source",
-	options=X_train.Source.unique()
+	options=X_train.source.unique()
 )
 
 destination = st.selectbox(
 	"Destination",
-	options=X_train.Destination.unique()
+	options=X_train.destination.unique()
 )
 
 dep_time = st.time_input("Departure Time:")
@@ -253,28 +259,27 @@ total_stops = st.number_input(
 
 
 x_new = pd.DataFrame(dict(
-	Airline=[airline],
-	Date_of_Journey=[doj],
-	Source=[source],
-	Destination=[destination],
-	Dep_Time=[dep_time],
-	Arrival_Time=[arrival_time],
-	Duration_in_minute=[duration],
-	Total_Stops=[total_stops],
+	airline=[airline],
+	date_of_journey=[doj],
+	source=[source],
+	destination=[destination],
+	dep_time=[dep_time],
+	arrival_time=[arrival_time],
+	duration=[duration],
+	total_stops=[total_stops],
 
 )).astype({
 	col: "str"
-	for col in ["Date_of_Journey", "Dep_Time", "Arrival_Time"]
+	for col in ["date_of_journey", "dep_time", "arrival_time"]
 })
 
 if st.button("Predict"):
 	saved_preprocessor = joblib.load("preprocessor.joblib")
 	x_new_pre = saved_preprocessor.transform(x_new)
 
-	with open("xgboost-model", "rb") as f:
+	with open("xgboost_model.pkl", "rb") as f:
 		model = pickle.load(f)
-	x_new_xgb = xgb.DMatrix(x_new_pre)
-	pred = model.predict(x_new_xgb)[0]
+	pred = model.predict(x_new_pre)[0]
 
 	st.info(f"The predicted price is {pred:,.0f} INR")
 
