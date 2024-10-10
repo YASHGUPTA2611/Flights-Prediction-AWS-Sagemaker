@@ -18,13 +18,22 @@ This repository hosts a Streamlit web application designed to predict flight tic
 - **Web Interface:** A user-friendly and interactive interface created with Streamlit.
 
 ## 🛠️ Dependencies
-Before running the application, ensure you have the following packages installed:
+Before running the application, ensure you have packages installed from requirements.txt
 
-```bash
-pandas
-numpy
-scikit-learn
-joblib
-feature-engine
-streamlit
-xgboost
+## Code Walkthrough
+### Preprocessing Pipelines
+The code employs ColumnTransformer and Pipeline to effectively handle preprocessing, including:
+
+Encoding airlines with RareLabelEncoder and MeanEncoder
+Extracting journey date features using DatetimeFeatures
+Combining and encoding source and destination with custom transformers and distance mapping
+Processing departure and arrival times to determine the time of day
+Scaling features using StandardScaler and PowerTransformer
+### Feature Selection
+A RandomForestRegressor serves as the base estimator in the SelectBySingleFeaturePerformance selector to identify relevant features based on the R² score.
+
+### Model Integration
+The preprocessor is fitted and saved as preprocessor.joblib, while the XGBoost model is loaded during prediction using pickle.
+
+### Web Application
+User inputs are gathered via Streamlit widgets and transformed using the saved preprocessor. The predicted flight price is displayed on the webpage using the pre-trained XGBoost model.
