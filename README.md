@@ -20,15 +20,16 @@ This repository hosts a Streamlit web application designed to predict flight tic
 ## 🛠️ Dependencies
 Before running the application, ensure you have packages installed from requirements.txt
 
-## Code Walkthrough
+## 📖 Code Walkthrough
 ### Preprocessing Pipelines
 The code employs ColumnTransformer and Pipeline to effectively handle preprocessing, including:
 
-Encoding airlines with RareLabelEncoder and MeanEncoder
-Extracting journey date features using DatetimeFeatures
-Combining and encoding source and destination with custom transformers and distance mapping
-Processing departure and arrival times to determine the time of day
-Scaling features using StandardScaler and PowerTransformer
+- Encoding airlines with RareLabelEncoder and MeanEncoder
+- Extracting journey date features using DatetimeFeatures
+- Combining and encoding source and destination with custom transformers and distance mapping
+- Processing departure and arrival times to determine the time of day
+- Scaling features using StandardScaler and PowerTransformer
+  
 ### Feature Selection
 A RandomForestRegressor serves as the base estimator in the SelectBySingleFeaturePerformance selector to identify relevant features based on the R² score.
 
